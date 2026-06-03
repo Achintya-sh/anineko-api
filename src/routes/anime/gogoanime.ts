@@ -1,297 +1,217 @@
 import { FastifyRequest, FastifyReply, FastifyInstance, RegisterOptions } from 'fastify';
-import { ANIME } from '@consumet/extensions';
-import { StreamingServers } from '@consumet/extensions/dist/models';
+import { AniNekoScraper } from '../../services/anineko';
 import cache from '../../utils/cache';
 import { redis } from '../../main';
 import { Redis } from 'ioredis';
+import axios from 'axios';
 
 const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
-  const gogoanime = new ANIME.Gogoanime(process.env.GOGOANIME_URL);
+  const anineko = new AniNekoScraper();
   const redisCacheTime = 60 * 60;
   const redisPrefix = 'gogoanime:';
 
   fastify.get('/', (_, rp) => {
     rp.status(200).send({
-      intro:
-        "Welcome to the gogoanime provider: check out the provider's website @ https://www1.gogoanime.bid/",
+      intro: "Welcome to the custom AniNeko Gogoanime scraper! 🐈",
       routes: [
         '/:query',
         '/info/:id',
         '/watch/:episodeId',
-        '/servers/:episodeId',
-        '/genre/:genre',
-        '/genre/list',
-        '/top-airing',
-        '/movies',
-        '/popular',
-        '/recent-episodes',
-        '/anime-list',
-        '/download',
+        '/embed'
       ],
-      documentation: 'https://docs.consumet.org/#tag/gogoanime',
     });
   });
 
+  // Search Anime
   fastify.get('/:query', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = (request.params as { query: string }).query;
-    const page = (request.query as { page: number }).page || 1;
+    try {
+      const results = redis
+        ? await cache.fetch(
+            redis as Redis,
+            `${redisPrefix}search;${query}`,
+            async () => await anineko.search(query),
+            redisCacheTime,
+          )
+        : await anineko.search(query);
 
-    const res = redis ? await cache.fetch(
-      redis as Redis,
-      `${redisPrefix}search;${page};${query}`,
-      async () => await gogoanime.search(query, page),
-      redisCacheTime,
-    ) : await gogoanime.search(query, page);
-
-    reply.status(200).send(res);
+      reply.status(200).send({
+        currentPage: 1,
+        hasNextPage: false,
+        results
+      });
+    } catch (err: any) {
+      reply.status(500).send({ message: err.message });
+    }
   });
 
+  // Get Info & Episode list
   fastify.get('/info/:id', async (request: FastifyRequest, reply: FastifyReply) => {
     const id = decodeURIComponent((request.params as { id: string }).id);
-
     try {
-      const res = redis ? await cache.fetch(
-        redis as Redis,
-        `${redisPrefix}info;${id}`,
-        async () => await gogoanime
-        .fetchAnimeInfo(id)
-        .catch((err) => reply.status(404).send({ message: err })),
-        redisCacheTime,
-      ) : await gogoanime
-      .fetchAnimeInfo(id)
-      .catch((err) => reply.status(404).send({ message: err }));
+      const info = redis
+        ? await cache.fetch(
+            redis as Redis,
+            `${redisPrefix}info;${id}`,
+            async () => await anineko.fetchAnimeInfo(id),
+            redisCacheTime,
+          )
+        : await anineko.fetchAnimeInfo(id);
 
-      reply.status(200).send(res);
-    } catch (err) {
-      reply
-        .status(500)
-        .send({ message: 'Something went wrong. Please try again later.' });
+      if (!info) {
+        return reply.status(404).send({ message: 'Anime not found' });
+      }
+
+      reply.status(200).send(info);
+    } catch (err: any) {
+      reply.status(500).send({ message: err.message });
     }
   });
 
-  fastify.get('/genre/:genre', async (request: FastifyRequest, reply: FastifyReply) => {
-    const genre = (request.params as { genre: string }).genre;
-    const page = (request.query as { page: number }).page ?? 1;
-
-    try {
-      const res = redis ? await cache.fetch(
-        redis as Redis,
-        `${redisPrefix}genre;${page};${genre}`,
-        async () => await gogoanime
-        .fetchGenreInfo(genre, page)
-        .catch((err) => reply.status(404).send({ message: err })),
-        redisCacheTime,
-      ) : await gogoanime
-      .fetchGenreInfo(genre, page)
-      .catch((err) => reply.status(404).send({ message: err }));
-      reply.status(200).send(res);
-    } catch {
-      reply
-        .status(500)
-        .send({ message: 'Something went wrong. Please try again later.' });
-    }
-  });
-
-  fastify.get('/genre/list', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      
-      const res = redis ? await cache.fetch(
-        redis as Redis,
-        `${redisPrefix}genre-list`,
-        async () => await gogoanime
-        .fetchGenreList()
-        .catch((err) => reply.status(404).send({ message: err })),
-        redisCacheTime * 24,
-      ) : await gogoanime
-      .fetchGenreList()
-      .catch((err) => reply.status(404).send({ message: err }));
-      reply.status(200).send(res);
-    } catch {
-      reply
-        .status(500)
-        .send({ message: 'Something went wrong. Please try again later.' });
-    }
-  });
-
+  // Get Episode Stream Sources (with Sub/Dub selection)
   fastify.get(
     '/watch/:episodeId',
     async (request: FastifyRequest, reply: FastifyReply) => {
       const episodeId = (request.params as { episodeId: string }).episodeId;
-      const server = (request.query as { server: StreamingServers }).server;
-
-      if (server && !Object.values(StreamingServers).includes(server)) {
-        reply.status(400).send('Invalid server');
-      }
+      const isDub = (request.query as { dub?: string }).dub === 'true';
 
       try {
-        const res = redis ? await cache.fetch(
-          redis as Redis,
-          `${redisPrefix}watch;${server};${episodeId}`,
-          async () => await gogoanime
-          .fetchEpisodeSources(episodeId, server)
-          .catch((err) => reply.status(404).send({ message: err })),
-          redisCacheTime,
-        ) : await gogoanime
-        .fetchEpisodeSources(episodeId, server)
-        .catch((err) => reply.status(404).send({ message: err }));
+        const allSources = redis
+          ? await cache.fetch(
+              redis as Redis,
+              `${redisPrefix}watch-raw;${episodeId}`,
+              async () => await anineko.fetchEpisodeSources(episodeId),
+              redisCacheTime,
+          )
+          : await anineko.fetchEpisodeSources(episodeId);
 
-        reply.status(200).send(res);
-      } catch (err) {
-        reply
-          .status(500)
-          .send({ message: 'Something went wrong. Please try again later.' });
+        let filtered = allSources.filter(s => s.isDub === isDub);
+        if (filtered.length === 0) {
+          filtered = allSources;
+        }
+
+        const sources = filtered.map(s => ({
+          url: s.url,
+          quality: s.server,
+          isM3U8: s.url.includes('.m3u8')
+        }));
+
+        reply.status(200).send({ sources });
+      } catch (err: any) {
+        reply.status(500).send({ message: err.message });
       }
     },
   );
 
-  fastify.get(
-    '/servers/:episodeId',
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      const episodeId = (request.params as { episodeId: string }).episodeId;
+  // Embed redirection route
+  fastify.get('/embed', async (request: FastifyRequest, reply: FastifyReply) => {
+    const anilistId = (request.query as { anilistId?: string }).anilistId;
+    const title = (request.query as { title?: string }).title;
+    const episode = (request.query as { episode?: string }).episode || '1';
+    const isDub = (request.query as { dub?: string }).dub === 'true';
 
-      try {
-        const res = redis ? await cache.fetch(
-          redis as Redis,
-          `${redisPrefix}servers;${episodeId}`,
-          async () => await gogoanime
-          .fetchEpisodeServers(episodeId)
-          .catch((err) => reply.status(404).send({ message: err })),
-          redisCacheTime,
-        ) : await gogoanime
-        .fetchEpisodeServers(episodeId)
-        .catch((err) => reply.status(404).send({ message: err }));
-
-        reply.status(200).send(res);
-      } catch (err) {
-        reply
-          .status(500)
-          .send({ message: 'Something went wrong. Please try again later.' });
-      }
-    },
-  );
-
-  fastify.get('/top-airing', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const page = (request.query as { page: number }).page ?? 1;
+      let slug = '';
+      const normalize = (str: string) => str.replace(/['']/g, "'").replace(/[""]/g, '"').trim();
 
-      const res = redis ? await cache.fetch(
-        redis as Redis,
-        `${redisPrefix}top-airing;${page}`,
-        async () => await gogoanime.fetchTopAiring(page),
-        redisCacheTime,
-      ) : await gogoanime.fetchTopAiring(page);
+      if (anilistId) {
+        const cacheKey = `${redisPrefix}anilist-to-slug:${anilistId}`;
+        const cached = redis ? await (redis as Redis).get(cacheKey) : null;
+        if (cached) {
+          slug = cached;
+        } else {
+          const query = `
+            query ($id: Int) {
+              Media (id: $id, type: ANIME) {
+                title {
+                  romaji
+                  english
+                  userPreferred
+                }
+              }
+            }
+          `;
+          const alRes = await axios.post('https://graphql.anilist.co', {
+            query,
+            variables: { id: parseInt(anilistId) }
+          });
+          const titles = alRes.data?.data?.Media?.title;
 
-      reply.status(200).send(res);
-    } catch (err) {
-      reply
-        .status(500)
-        .send({ message: 'Something went wrong. Contact developers for help.' });
-    }
-  });
+          let searchResults: any[] = [];
+          let selectedTitle = '';
 
-  fastify.get('/movies', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const page = (request.query as { page: number }).page ?? 1;
+          // 1. Try English Title
+          if (titles?.english) {
+            selectedTitle = normalize(titles.english);
+            searchResults = await anineko.search(selectedTitle);
+          }
 
-      const res = redis ? await cache.fetch(
-        redis as Redis,
-        `${redisPrefix}movies;${page}`,
-        async () => await gogoanime.fetchRecentMovies(page),
-        redisCacheTime,
-      ) : await gogoanime.fetchRecentMovies(page);
+          // 2. Try Romaji Title if English failed or wasn't provided
+          if (searchResults.length === 0 && titles?.romaji) {
+            selectedTitle = normalize(titles.romaji);
+            searchResults = await anineko.search(selectedTitle);
+          }
 
-      reply.status(200).send(res);
-    } catch (err) {
-      reply
-        .status(500)
-        .send({ message: 'Something went wrong. Contact developers for help.' });
-    }
-  });
+          // 3. Try User Preferred Title
+          if (searchResults.length === 0 && titles?.userPreferred) {
+            selectedTitle = normalize(titles.userPreferred);
+            searchResults = await anineko.search(selectedTitle);
+          }
 
-  fastify.get('/popular', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const page = (request.query as { page: number }).page ?? 1;
+          // 4. Try Query Param Title
+          if (searchResults.length === 0 && title) {
+            selectedTitle = normalize(title);
+            searchResults = await anineko.search(selectedTitle);
+          }
 
-      const res = redis ? await cache.fetch(
-        redis as Redis,
-        `${redisPrefix}popular;${page}`,
-        async () => await gogoanime.fetchPopular(page),
-        redisCacheTime,
-      ) : await gogoanime.fetchPopular(page);
-
-      reply.status(200).send(res);
-    } catch (err) {
-      reply
-        .status(500)
-        .send({ message: 'Something went wrong. Contact developers for help.' });
-    }
-  });
-
-  fastify.get(
-    '/recent-episodes',
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const type = (request.query as { type: number }).type ?? 1;
-        const page = (request.query as { page: number }).page ?? 1;
-
-        const res = redis ? await cache.fetch(
-          redis as Redis,
-          `${redisPrefix}recent-episodes;${page};${type}`,
-          async () => await gogoanime.fetchRecentEpisodes(page, type),
-          redisCacheTime,
-        ) : await gogoanime.fetchRecentEpisodes(page, type);
-
-        reply.status(200).send(res);
-      } catch (err) {
-        reply
-          .status(500)
-          .send({ message: 'Something went wrong. Contact developers for help.' });
+          if (searchResults.length > 0) {
+            const target = selectedTitle.toLowerCase();
+            const best = searchResults.find(r => {
+              const t = r.title.toLowerCase();
+              return t === target || t.includes(target) || target.includes(t);
+            }) || searchResults[0];
+            slug = best.id;
+            console.log(`[Embed Mapping] Resolved AniList ID ${anilistId} to AniNeko slug: "${slug}"`);
+            if (redis) {
+              await (redis as Redis).setex(cacheKey, redisCacheTime, slug);
+            }
+          }
+        }
       }
-    },
-  );
-  fastify.get(
-    '/anime-list',
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const page = (request.query as { page: number }).page ?? 1;
 
-        const res = redis ? await cache.fetch(
-          redis as Redis,
-          `gogoanime:anime-list;${page}`,
-          async () => await gogoanime.fetchAnimeList(page),
-          redisCacheTime,
-        ) : await gogoanime.fetchAnimeList(page);
-
-        reply.status(200).send(res);
-      } catch (err) {
-        reply
-          .status(500)
-          .send({ message: 'Something went wrong. Contact developers for help.' });
+      if (!slug && title) {
+        const cleanTitle = normalize(title);
+        const searchResults = await anineko.search(cleanTitle);
+        if (searchResults.length > 0) {
+          const target = cleanTitle.toLowerCase();
+          const best = searchResults.find(r => {
+            const t = r.title.toLowerCase();
+            return t === target || t.includes(target) || target.includes(t);
+          }) || searchResults[0];
+          slug = best.id;
+        }
       }
-    },
-  );
 
-  fastify.get('/download', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const downloadLink = (request.query as { link: string }).link;
-      if(!downloadLink){
-        reply.status(400).send('Invalid link');
+      if (!slug) {
+        console.error(`[Embed Mapping] Failed to resolve slug for AniList ID: ${anilistId}, Title: ${title}`);
+        return reply.status(404).send({ message: 'Anime title or mapping not found' });
       }
-      const res = redis ? await cache.fetch(
-        redis as Redis,
-        `${redisPrefix}download-${downloadLink}`,
-        async () => await gogoanime
-        .fetchDirectDownloadLink(downloadLink)
-        .catch((err) => reply.status(404).send({ message: err })),
-        redisCacheTime * 24,
-      ) : await gogoanime
-      .fetchDirectDownloadLink(downloadLink, process.env.RECAPTCHATOKEN ?? '')
-      .catch((err) => reply.status(404).send({ message: err }));
-      reply.status(200).send(res);
-    } catch {
-      reply
-        .status(500)
-        .send({ message: 'Something went wrong. Please try again later.' });
+
+      const episodeId = `${slug}/ep-${episode}`;
+      const sources = await anineko.fetchEpisodeSources(episodeId);
+
+      let filtered = sources.filter(s => s.isDub === isDub);
+      if (filtered.length === 0) {
+        filtered = sources;
+      }
+
+      if (filtered.length === 0) {
+        return reply.status(404).send({ message: 'No video sources found' });
+      }
+
+      return reply.redirect(302, filtered[0].url);
+    } catch (err: any) {
+      reply.status(500).send({ message: err.message });
     }
   });
 };

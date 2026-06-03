@@ -29,7 +29,11 @@
 
   },
   "include": [
-    "src/**/*.ts",
+    "src/main.ts",
+    "src/routes/anime/index.ts",
+    "src/routes/anime/gogoanime.ts",
+    "src/services/anineko.ts",
+    "src/utils/cache.ts"
   ],
   "exclude": [
     "node_modules",
