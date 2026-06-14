@@ -258,7 +258,8 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
       }
 
       // Rewrite CDN URLs that require special Referer headers through our proxy
-      const proxyBase = `${request.protocol}://${request.hostname}/anime/gogoanime`;
+      const proto = (request.headers['x-forwarded-proto'] as string || request.protocol).split(',')[0].trim();
+      const proxyBase = `${proto}://${request.hostname}/anime/gogoanime`;
       const sources = rawSources.map(s => ({
         ...s,
         url: needsProxy(s.url)
@@ -305,7 +306,8 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
       });
 
       const contentType = (response.headers['content-type'] || '') as string;
-      const proxyBase = `${request.protocol}://${request.hostname}/anime/gogoanime`;
+      const proto = (request.headers['x-forwarded-proto'] as string || request.protocol).split(',')[0].trim();
+      const proxyBase = `${proto}://${request.hostname}/anime/gogoanime`;
 
       // Rewrite m3u8 manifests so segment/key URLs also go through proxy
       if (url.includes('.m3u8') || contentType.includes('mpegurl')) {
