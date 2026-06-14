@@ -251,11 +251,20 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
     console.log(`\n[Embed/Miruro] AniList=${anilistId} EP=${epNum} Dub=${isDub} Title="${displayTitle}"`);
 
     try {
-      const sources = await resolveMiruroStream(parsedId, epNum, isDub);
+      const rawSources = await resolveMiruroStream(parsedId, epNum, isDub);
 
-      if (sources.length === 0) {
+      if (rawSources.length === 0) {
         return reply.status(404).type('text/html').send(errorHtml('No video sources found.'));
       }
+
+      // Rewrite CDN URLs that require special Referer headers through our proxy
+      const proxyBase = `${request.protocol}://${request.hostname}/anime/gogoanime`;
+      const sources = rawSources.map(s => ({
+        ...s,
+        url: needsProxy(s.url)
+          ? `${proxyBase}/proxy?url=${encodeURIComponent(s.url)}`
+          : s.url,
+      }));
 
       return reply.type('text/html').send(playerHtml(sources, displayTitle, epNum, isDub));
     } catch (err: any) {
@@ -263,7 +272,83 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
       return reply.status(500).type('text/html').send(errorHtml(`Could not load stream: ${err.message}`));
     }
   });
+
+  // ── Miruro embed alias (same logic, registered under gogoanime prefix for routing) ──
+  fastify.get('/miruro-embed', async (request: FastifyRequest, reply: FastifyReply) => {
+    // delegate to the same handler — just re-use the embed logic
+    return reply.redirect(302,
+      `/anime/gogoanime/embed?${new URLSearchParams(request.query as Record<string, string>).toString()}`);
+  });
+
+  // ── Stream proxy — forwards owocdn.top / kwik.cx with correct Referer ──
+  fastify.get('/proxy', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { url } = request.query as { url?: string };
+    if (!url) return reply.status(400).send('Missing url parameter.');
+
+    try {
+      const headers: Record<string, string> = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      };
+      if (url.includes('owocdn.top') || url.includes('kwik.cx')) {
+        headers['Referer'] = 'https://kwik.cx/';
+        headers['Origin'] = 'https://kwik.cx';
+      } else if (url.includes('miruro.to') || url.includes('miruro.online')) {
+        headers['Referer'] = 'https://www.miruro.to/';
+      }
+
+      const response = await axios({
+        method: 'get',
+        url,
+        headers,
+        responseType: 'arraybuffer',
+        timeout: 20000,
+      });
+
+      const contentType = (response.headers['content-type'] || '') as string;
+      const proxyBase = `${request.protocol}://${request.hostname}/anime/gogoanime`;
+
+      // Rewrite m3u8 manifests so segment/key URLs also go through proxy
+      if (url.includes('.m3u8') || contentType.includes('mpegurl')) {
+        const text = Buffer.from(response.data).toString('utf-8');
+        const rewritten = text.split('\n').map(line => {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#EXT')) {
+            // Rewrite URI= attributes inside tags (e.g. #EXT-X-KEY:URI="...")
+            return line.replace(/URI="([^"]+)"/g, (_, uri) => {
+              const abs = toAbsolute(uri, url);
+              return `URI="${proxyBase}/proxy?url=${encodeURIComponent(abs)}"`;
+            });
+          }
+          // Rewrite bare segment lines
+          const abs = toAbsolute(trimmed, url);
+          return `${proxyBase}/proxy?url=${encodeURIComponent(abs)}`;
+        }).join('\n');
+
+        reply.header('Content-Type', 'application/vnd.apple.mpegurl');
+        reply.header('Access-Control-Allow-Origin', '*');
+        return reply.send(rewritten);
+      }
+
+      reply.header('Content-Type', contentType);
+      reply.header('Access-Control-Allow-Origin', '*');
+      if (response.headers['content-length']) reply.header('Content-Length', response.headers['content-length']);
+      return reply.send(response.data);
+    } catch (err: any) {
+      console.error(`[Proxy] Error for "${url}": ${err.message}`);
+      return reply.status(502).send(`Proxy error: ${err.message}`);
+    }
+  });
 };
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function needsProxy(url: string): boolean {
+  return url.includes('owocdn.top') || url.includes('kwik.cx');
+}
+
+function toAbsolute(path: string, base: string): string {
+  if (path.startsWith('http')) return path;
+  try { return new URL(path, base).toString(); } catch { return path; }
+}
 
 // ─── HTML Player Page ────────────────────────────────────────────────────────
 function playerHtml(sources: Array<{ url: string; quality: string; isM3U8: boolean }>, title: string, episode: number, isDub: boolean): string {
