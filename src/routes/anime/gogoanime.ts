@@ -4,6 +4,7 @@ import cache from '../../utils/cache';
 import { redis } from '../../main';
 import { Redis } from 'ioredis';
 import axios from 'axios';
+import { resolveMiruroStream } from '../../services/miruro';
 
 interface ChainItem {
   id: number;
@@ -232,103 +233,152 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
     },
   );
 
-  // Embed redirection route
+  // Embed route — powered by Miruro's secure pipe API (replaces broken AniNeko scraper)
   fastify.get('/embed', async (request: FastifyRequest, reply: FastifyReply) => {
     const anilistId = (request.query as { anilistId?: string }).anilistId;
     const title = (request.query as { title?: string }).title;
     const episode = (request.query as { episode?: string }).episode || '1';
     const isDub = (request.query as { dub?: string }).dub === 'true';
 
+    if (!anilistId) {
+      return reply.status(400).type('text/html').send(errorHtml('Missing anilistId parameter.'));
+    }
+
+    const parsedId = parseInt(anilistId, 10);
+    const epNum = parseInt(episode, 10);
+    const displayTitle = title ? decodeURIComponent(title) : `Anime #${anilistId}`;
+
+    console.log(`\n[Embed/Miruro] AniList=${anilistId} EP=${epNum} Dub=${isDub} Title="${displayTitle}"`);
+
     try {
-      let resolvedSlug: string | null = null;
-      let resolvedEp = parseInt(episode, 10);
-      const normalize = (str: string) => str.replace(/['']/g, "'").replace(/[""]/g, '"').trim();
+      const sources = await resolveMiruroStream(parsedId, epNum, isDub);
 
-      if (anilistId) {
-        const parsedId = parseInt(anilistId, 10);
-        const cacheKey = `${redisPrefix}anilist-to-slug:${anilistId}:${episode}:${isDub}`;
-        const cached = redis ? await (redis as Redis).get(cacheKey) : null;
-        
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          resolvedSlug = parsed.slug;
-          resolvedEp = parsed.episode;
-        } else {
-          const chain = await buildChain(parsedId);
-          if (chain.length > 0) {
-            console.log(`[Embed Mapping] Resolved sequel chain of length ${chain.length}`);
-            let accumulated = 0;
-
-            for (const item of chain) {
-              if (item.format !== 'TV' && chain.some(c => c.format === 'TV')) {
-                continue;
-              }
-
-              const results = await anineko.search(item.title);
-              const slugCandidate = getBestSlug(results, item.title);
-
-              if (!slugCandidate) {
-                console.warn(`[AniNeko] Could not find slug for title: "${item.title}"`);
-                continue;
-              }
-
-              const info = await anineko.fetchAnimeInfo(slugCandidate);
-              const count = info?.episodes?.length || 0;
-              console.log(`[AniNeko] Checked slug: ${slugCandidate} (${count} episodes)`);
-
-              if (resolvedEp <= accumulated + count) {
-                resolvedSlug = slugCandidate;
-                resolvedEp = resolvedEp - accumulated;
-                break;
-              }
-              accumulated += count;
-            }
-
-            // Fallback to last resolved slug if out of range
-            if (!resolvedSlug && chain.length > 0) {
-              const lastItem = chain[chain.length - 1];
-              const results = await anineko.search(lastItem.title);
-              resolvedSlug = getBestSlug(results, lastItem.title);
-              resolvedEp = resolvedEp - accumulated;
-            }
-
-            if (resolvedSlug && redis) {
-              await (redis as Redis).setex(cacheKey, redisCacheTime, JSON.stringify({ slug: resolvedSlug, episode: resolvedEp }));
-            }
-          }
-        }
+      if (sources.length === 0) {
+        return reply.status(404).type('text/html').send(errorHtml('No video sources found.'));
       }
 
-      if (!resolvedSlug && title) {
-        const cleanTitle = normalize(title);
-        const searchResults = await anineko.search(cleanTitle);
-        if (searchResults.length > 0) {
-          resolvedSlug = getBestSlug(searchResults, cleanTitle);
-        }
-      }
-
-      if (!resolvedSlug) {
-        console.error(`[Embed Mapping] Failed to resolve slug for AniList ID: ${anilistId}, Title: ${title}`);
-        return reply.status(404).send({ message: 'Anime title or mapping not found' });
-      }
-
-      const episodeId = `${resolvedSlug}/ep-${resolvedEp}`;
-      const sources = await anineko.fetchEpisodeSources(episodeId);
-
-      let filtered = sources.filter(s => s.isDub === isDub);
-      if (filtered.length === 0) {
-        filtered = sources;
-      }
-
-      if (filtered.length === 0) {
-        return reply.status(404).send({ message: 'No video sources found' });
-      }
-
-      return reply.redirect(302, filtered[0].url);
+      return reply.type('text/html').send(playerHtml(sources, displayTitle, epNum, isDub));
     } catch (err: any) {
-      reply.status(500).send({ message: err.message });
+      console.error(`[Embed/Miruro] Error: ${err.message}`);
+      return reply.status(500).type('text/html').send(errorHtml(`Could not load stream: ${err.message}`));
     }
   });
 };
+
+// ─── HTML Player Page ────────────────────────────────────────────────────────
+function playerHtml(sources: Array<{ url: string; quality: string; isM3U8: boolean }>, title: string, episode: number, isDub: boolean): string {
+  const preferred = sources.find(s => s.quality === '1080p')
+    || sources.find(s => s.quality === '720p')
+    || sources.find(s => s.quality === 'default')
+    || sources[0];
+
+  const qualityButtons = sources
+    .filter(s => s.url)
+    .map(s => {
+      const active = s.url === preferred.url ? 'active' : '';
+      return `<button class="q-btn ${active}" data-url="${s.url}" data-m3u8="${!!s.isM3U8}">${s.quality}</button>`;
+    }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title} — Ep ${episode}${isDub ? ' [DUB]' : ' [SUB]'}</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #wrap { position: relative; width: 100%; height: 100vh; }
+    video { width: 100%; height: 100%; background: #000; display: block; }
+    #qbar {
+      position: absolute; top: 10px; right: 10px; z-index: 20;
+      display: flex; gap: 5px; flex-wrap: wrap;
+      background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 6px;
+    }
+    .q-btn {
+      background: transparent; color: #999; border: 1px solid #444;
+      padding: 3px 9px; font: 700 11px/1 monospace; cursor: pointer;
+      border-radius: 3px; text-transform: uppercase; transition: all .15s;
+    }
+    .q-btn:hover { border-color: #ff6b00; color: #ff6b00; }
+    .q-btn.active { background: #ff6b00; color: #000; border-color: #ff6b00; }
+    #err {
+      display: none; position: absolute; inset: 0;
+      background: rgba(0,0,0,.85); color: #f44; font: 13px/1.5 monospace;
+      align-items: center; justify-content: center; text-align: center;
+      padding: 20px;
+    }
+    #err.show { display: flex; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <video id="v" controls playsinline></video>
+    ${sources.length > 1 ? `<div id="qbar">${qualityButtons}</div>` : ''}
+    <div id="err">⚠ Stream failed.<br>Try another quality or server.</div>
+  </div>
+  <script>
+    const vid = document.getElementById('v');
+    const err = document.getElementById('err');
+    let hls = null;
+
+    function load(url, isM3U8) {
+      err.classList.remove('show');
+      if (hls) { hls.destroy(); hls = null; }
+      if (isM3U8) {
+        if (Hls.isSupported()) {
+          hls = new Hls({ enableWorker: true });
+          hls.loadSource(url);
+          hls.attachMedia(vid);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => vid.play().catch(() => {}));
+          hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) err.classList.add('show'); });
+        } else if (vid.canPlayType('application/vnd.apple.mpegurl')) {
+          vid.src = url; vid.play().catch(() => {});
+        } else { err.classList.add('show'); }
+      } else {
+        vid.src = url; vid.play().catch(() => {});
+      }
+    }
+
+    load(${JSON.stringify(preferred.url)}, ${!!preferred.isM3U8});
+
+    document.querySelectorAll('.q-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        document.querySelectorAll('.q-btn').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        load(b.dataset.url, b.dataset.m3u8 === 'true');
+      });
+    });
+  </script>
+</body>
+</html>`;
+}
+
+// ─── HTML Error Page ─────────────────────────────────────────────────────────
+function errorHtml(msg: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stream Error</title>
+  <style>
+    body { background:#0a0a0a; color:#f44; font:13px/1.6 monospace;
+      display:flex; align-items:center; justify-content:center;
+      min-height:100vh; padding:20px; text-align:center; }
+    .box { border:2px solid #f44; padding:30px 40px; max-width:480px; }
+    h2 { font-size:13px; letter-spacing:3px; margin-bottom:14px; text-transform:uppercase; }
+    p { color:#777; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>⚠ Stream Error</h2>
+    <p>${msg}</p>
+    <p style="margin-top:12px;color:#444;">Switch to a different server in the player.</p>
+  </div>
+</body>
+</html>`;
+}
 
 export default routes;
