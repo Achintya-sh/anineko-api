@@ -50,6 +50,13 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Helper to construct dynamic proxy URLs with robust HTTPS enforcement for production
+const getBaseProxyUrl = (req) => {
+  const host = req.get('host') || '';
+  const protocol = (host.includes('localhost') || host.includes('127.0.0.1')) ? req.protocol : 'https';
+  return `${protocol}://${host}/anime/proxy?url=`;
+};
+
 // ─── AniNeko base URL ────────────────────────────────────────────────────────
 const GOGO_BASE = 'https://anineko.to';
 
@@ -382,7 +389,7 @@ app.get('/anime/gogoanime/embed', async (req, res) => {
 
   try {
     const sources = await resolveAnimeStream(anilistId, epNum, isDub, rawTitle);
-    const baseProxyUrl = `${req.protocol}://${req.get('host')}/anime/proxy?url=`;
+    const baseProxyUrl = getBaseProxyUrl(req);
     const proxiedSources = sources.map(s => ({
       ...s,
       url: `${baseProxyUrl}${encodeURIComponent(s.url)}`
@@ -716,7 +723,7 @@ app.get('/anime/proxy', async (req, res) => {
     });
 
     const contentType = response.headers['content-type'] || '';
-    const baseProxyUrl = `${req.protocol}://${req.get('host')}/anime/proxy?url=`;
+    const baseProxyUrl = getBaseProxyUrl(req);
 
     if (url.includes('.m3u8') || contentType.includes('application/vnd.apple.mpegurl') || contentType.includes('audio/x-mpegurl')) {
       let content = response.data.toString('utf-8');
@@ -780,7 +787,7 @@ app.get('/anime/miruro/embed', async (req, res) => {
 
   try {
     const sources = await resolveMiruroStream(anilistId, epNum, isDub);
-    const baseProxyUrl = `${req.protocol}://${req.get('host')}/anime/proxy?url=`;
+    const baseProxyUrl = getBaseProxyUrl(req);
     const proxiedSources = sources.map(s => ({
       ...s,
       url: `${baseProxyUrl}${encodeURIComponent(s.url)}`
