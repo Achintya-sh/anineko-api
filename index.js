@@ -506,7 +506,7 @@ function playerPage(sources, title, episode, isDub) {
     ::cue {
       background: rgba(0, 0, 0, 0.75);
       color: #fff;
-      font-size: 18px;
+      font-size: 26px;
       font-family: inherit;
     }
 
@@ -858,10 +858,10 @@ function playerPage(sources, title, episode, isDub) {
               <div class="setting-section">
                 <span>Size</span>
                 <select id="sub-size">
-                  <option value="14px">Small</option>
-                  <option value="18px" selected>Medium</option>
-                  <option value="24px">Large</option>
-                  <option value="32px">X-Large</option>
+                  <option value="18px">Small</option>
+                  <option value="26px" selected>Medium</option>
+                  <option value="34px">Large</option>
+                  <option value="44px">X-Large</option>
                 </select>
               </div>
               <div class="setting-section">
@@ -1317,6 +1317,11 @@ function playerPage(sources, title, episode, isDub) {
     };
 
     document.onclick = closeAllMenus;
+
+    // Prevent dropdown menus from closing when clicking inside them
+    qualityMenu.onclick = (e) => e.stopPropagation();
+    speedMenu.onclick = (e) => e.stopPropagation();
+    subStylesMenu.onclick = (e) => e.stopPropagation();
 
     // Keyboard Hotkeys
     window.onkeydown = (e) => {
