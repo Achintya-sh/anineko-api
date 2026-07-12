@@ -881,6 +881,26 @@ function playerPage(sources, title, episode, isDub) {
                   <option value="rgba(0,0,0,1)">100%</option>
                 </select>
               </div>
+              <div class="setting-section">
+                <span>Outline</span>
+                <select id="sub-outline">
+                  <option value="none">None</option>
+                  <option value="shadow" selected>Shadow</option>
+                  <option value="thick">Thick</option>
+                </select>
+              </div>
+              <div class="setting-section">
+                <span>Align</span>
+                <select id="sub-align">
+                  <option value="center" selected>Center</option>
+                  <option value="left">Left</option>
+                  <option value="right">Right</option>
+                </select>
+              </div>
+              <div class="setting-section">
+                <span>Position</span>
+                <input type="range" id="sub-position" min="10" max="95" step="5" value="90" title="Vertical position">
+              </div>
             </div>
           </div>
 
@@ -933,6 +953,9 @@ function playerPage(sources, title, episode, isDub) {
     const subSizeSelect = document.getElementById('sub-size');
     const subColorSelect = document.getElementById('sub-color');
     const subBgSelect = document.getElementById('sub-bg');
+    const subOutlineSelect = document.getElementById('sub-outline');
+    const subAlignSelect = document.getElementById('sub-align');
+    const subPositionInput = document.getElementById('sub-position');
     
     const qualityBtn = document.getElementById('quality-btn');
     const qualityMenu = document.getElementById('quality-menu');
@@ -998,8 +1021,14 @@ function playerPage(sources, title, episode, isDub) {
         subBtn.classList.add('active');
         subStylesBtn.classList.remove('hidden');
         
+        track.addEventListener('load', () => {
+          applyCuePositionSettings();
+        });
+
         vid.textTracks.addEventListener('addtrack', () => {
-          vid.textTracks[0].mode = 'showing';
+          const t = vid.textTracks[0];
+          t.mode = 'showing';
+          t.addEventListener('cuechange', applyCuePositionSettings);
         });
       }
 
@@ -1180,31 +1209,77 @@ function playerPage(sources, title, episode, isDub) {
     const subStyleEl = document.createElement('style');
     document.head.appendChild(subStyleEl);
 
+    function applyCuePositionSettings() {
+      const track = vid.textTracks[0];
+      if (!track) return;
+
+      const posVal = parseFloat(subPositionInput.value);
+      const alignVal = subAlignSelect.value;
+
+      const apply = (cue) => {
+        cue.snapToLines = false;
+        cue.line = posVal;
+        cue.align = alignVal;
+      };
+
+      if (track.activeCues) {
+        for (let i = 0; i < track.activeCues.length; i++) {
+          apply(track.activeCues[i]);
+        }
+      }
+
+      if (track.cues) {
+        for (let i = 0; i < track.cues.length; i++) {
+          apply(track.cues[i]);
+        }
+      }
+    }
+
     function applySubtitleStyles() {
       const size = subSizeSelect.value;
       const color = subColorSelect.value;
       const bg = subBgSelect.value;
+      const outline = subOutlineSelect.value;
 
       localStorage.setItem('sub-size', size);
       localStorage.setItem('sub-color', color);
       localStorage.setItem('sub-bg', bg);
+      localStorage.setItem('sub-outline', outline);
+      localStorage.setItem('sub-position', subPositionInput.value);
+      localStorage.setItem('sub-align', subAlignSelect.value);
+
+      let textShadow = 'none';
+      if (outline === 'shadow') {
+        textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+      } else if (outline === 'thick') {
+        textShadow = '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000';
+      }
 
       subStyleEl.textContent = \`
         ::cue {
           font-size: \${size} !important;
           color: \${color} !important;
           background: \${bg} !important;
+          text-shadow: \${textShadow} !important;
         }
       \`;
+
+      applyCuePositionSettings();
     }
 
     subSizeSelect.onchange = applySubtitleStyles;
     subColorSelect.onchange = applySubtitleStyles;
     subBgSelect.onchange = applySubtitleStyles;
+    subOutlineSelect.onchange = applySubtitleStyles;
+    subAlignSelect.onchange = applySubtitleStyles;
+    subPositionInput.oninput = applySubtitleStyles;
 
     if (localStorage.getItem('sub-size')) subSizeSelect.value = localStorage.getItem('sub-size');
     if (localStorage.getItem('sub-color')) subColorSelect.value = localStorage.getItem('sub-color');
     if (localStorage.getItem('sub-bg')) subBgSelect.value = localStorage.getItem('sub-bg');
+    if (localStorage.getItem('sub-outline')) subOutlineSelect.value = localStorage.getItem('sub-outline');
+    if (localStorage.getItem('sub-align')) subAlignSelect.value = localStorage.getItem('sub-align');
+    if (localStorage.getItem('sub-position')) subPositionInput.value = localStorage.getItem('sub-position');
     applySubtitleStyles();
 
     // Volume Scrubber Logic
