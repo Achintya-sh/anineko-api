@@ -502,11 +502,11 @@ function playerPage(sources, title, episode, isDub) {
       object-fit: contain;
     }
 
-    /* Subtitles styling overrides */
+    /* Subtitles default cue styling override */
     ::cue {
       background: rgba(0, 0, 0, 0.75);
       color: #fff;
-      font-size: 16px;
+      font-size: 18px;
       font-family: inherit;
     }
 
@@ -563,6 +563,13 @@ function playerPage(sources, title, episode, isDub) {
       position: absolute; left: 0; right: 0; height: 100%;
       background: rgba(255,255,255,0.2);
       border-radius: 4px;
+    }
+    .progress-buffer {
+      position: absolute; left: 0; height: 100%;
+      background: rgba(255,255,255,0.15);
+      border-radius: 4px;
+      width: 0;
+      pointer-events: none;
     }
     .progress-hover {
       position: absolute; left: 0; height: 100%;
@@ -622,6 +629,41 @@ function playerPage(sources, title, episode, isDub) {
       font-family: monospace;
     }
 
+    /* Interactive Volume Slider */
+    .volume-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .volume-slider-wrapper {
+      width: 0;
+      overflow: hidden;
+      transition: width 0.2s ease;
+      display: flex;
+      align-items: center;
+    }
+    .volume-container:hover .volume-slider-wrapper {
+      width: 60px;
+    }
+    #volume-slider {
+      -webkit-appearance: none;
+      width: 60px;
+      height: 4px;
+      background: rgba(255,255,255,0.25);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    #volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ff6b00;
+      cursor: pointer;
+    }
+
+    /* Dropdown Menus */
     .dropdown-wrapper {
       position: relative;
     }
@@ -634,7 +676,7 @@ function playerPage(sources, title, episode, isDub) {
       border: 1px solid rgba(255,255,255,0.15);
       border-radius: 8px;
       padding: 6px 0;
-      min-width: 100px;
+      min-width: 110px;
       display: flex;
       flex-direction: column;
       z-index: 100;
@@ -657,6 +699,66 @@ function playerPage(sources, title, episode, isDub) {
     }
     .dropdown-item:hover { background: rgba(255,107,0,0.15); color: #ff6b00; }
     .dropdown-item.active { color: #ff6b00; font-weight: 700; }
+
+    /* Subtitle Customizer Panel */
+    .subtitle-settings-menu {
+      min-width: 175px !important;
+      padding: 10px 12px !important;
+      gap: 10px;
+      color: #ccc;
+    }
+    .setting-section {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .setting-section span {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .setting-section select {
+      background: #1a1a1a;
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      border-radius: 4px;
+      padding: 2px 6px;
+      outline: none;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    /* Resume progress toast */
+    .resume-toast {
+      position: absolute; bottom: 85px; left: 20px; z-index: 40;
+      background: rgba(15,15,15,0.95); border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px; padding: 10px 14px; display: flex; align-items: center;
+      gap: 12px; font-size: 12px; color: #fff; backdrop-filter: blur(10px);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+      transition: opacity 0.3s;
+    }
+    .resume-toast.hidden { opacity: 0; pointer-events: none; }
+    .resume-toast button {
+      background: transparent; border: 1px solid rgba(255,255,255,0.2);
+      color: #ccc; padding: 4px 10px; border-radius: 4px; cursor: pointer;
+      font-size: 11px; font-weight: bold; transition: all 0.2s;
+    }
+    .resume-toast button#resume-yes { background: #ff6b00; color: #000; border-color: #ff6b00; }
+    .resume-toast button:hover { transform: scale(1.05); }
+
+    /* Skip Intro Button */
+    .skip-btn {
+      position: absolute; bottom: 85px; right: 20px; z-index: 40;
+      background: rgba(15,15,15,0.95); border: 1px solid #ff6b00;
+      border-radius: 6px; padding: 8px 16px; color: #ff6b00;
+      font-weight: bold; cursor: pointer; font-size: 13px;
+      backdrop-filter: blur(10px); transition: all 0.2s;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+    .skip-btn:hover { background: #ff6b00; color: #000; }
+    .skip-btn.hidden { display: none; }
 
     /* Loader styling */
     .loader {
@@ -699,11 +801,22 @@ function playerPage(sources, title, episode, isDub) {
     ${sources.length > 1 ? `<div id="qbar">${serverButtons}</div>` : ''}
     <div id="err">⚠ Stream failed.<br>Try another quality or server.</div>
 
+    <!-- Resume Playback Toast -->
+    <div id="resume-toast" class="resume-toast hidden">
+      <span>Resume from <span id="resume-time">00:00</span>?</span>
+      <button id="resume-yes">Yes</button>
+      <button id="resume-no">No</button>
+    </div>
+
+    <!-- Skip Intro Button -->
+    <button id="skip-intro-btn" class="skip-btn hidden">Skip Intro</button>
+
     <!-- Custom Control Bar -->
     <div id="controls-bar" class="controls-bar hidden">
       <!-- Progress Bar (Scrubber) -->
       <div class="progress-container" id="progress-container">
         <div class="progress-bg"></div>
+        <div class="progress-buffer" id="progress-buffer"></div>
         <div class="progress-hover" id="progress-hover"></div>
         <div class="progress-fill" id="progress-fill"></div>
         <div class="progress-handle" id="progress-handle"></div>
@@ -712,28 +825,94 @@ function playerPage(sources, title, episode, isDub) {
       <!-- Controls Row -->
       <div class="buttons-row">
         <div class="left-controls">
+          <!-- Play / Pause -->
           <button id="play-btn" class="control-btn" title="Play">
             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
           </button>
+
+          <!-- Interactive Volume -->
+          <div class="volume-container">
+            <button id="volume-btn" class="control-btn" title="Mute">
+              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+            </button>
+            <div class="volume-slider-wrapper">
+              <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="1">
+            </div>
+          </div>
+
           <span id="time-display" class="time-display">00:00 / 00:00</span>
         </div>
 
         <div class="right-controls">
+          <!-- CC Toggle -->
           <button id="sub-btn" class="control-btn hidden" title="Toggle Subtitles">
             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect><line x1="7" y1="8" x2="17" y2="8"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="16" x2="13" y2="16"></line></svg>
           </button>
 
+          <!-- CC Customizer Menu -->
           <div class="dropdown-wrapper">
-            <button id="quality-btn" class="control-btn hidden" title="Change Quality">
+            <button id="sub-styles-btn" class="control-btn hidden" title="Subtitle Appearance">
+              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4z"></path></svg>
+            </button>
+            <div id="sub-styles-menu" class="dropdown-menu subtitle-settings-menu hidden">
+              <div class="setting-section">
+                <span>Size</span>
+                <select id="sub-size">
+                  <option value="14px">Small</option>
+                  <option value="18px" selected>Medium</option>
+                  <option value="24px">Large</option>
+                  <option value="32px">X-Large</option>
+                </select>
+              </div>
+              <div class="setting-section">
+                <span>Color</span>
+                <select id="sub-color">
+                  <option value="#ffffff" selected>White</option>
+                  <option value="#ffff00">Yellow</option>
+                  <option value="#00ff00">Green</option>
+                </select>
+              </div>
+              <div class="setting-section">
+                <span>Background</span>
+                <select id="sub-bg">
+                  <option value="rgba(0,0,0,0)">None</option>
+                  <option value="rgba(0,0,0,0.4)">40%</option>
+                  <option value="rgba(0,0,0,0.75)" selected>75%</option>
+                  <option value="rgba(0,0,0,1)">100%</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quality Select Menu -->
+          <div class="dropdown-wrapper">
+            <button id="quality-btn" class="control-btn hidden" title="Change Resolution">
               <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
             <div id="quality-menu" class="dropdown-menu hidden"></div>
           </div>
 
+          <!-- Playback Speed Menu -->
+          <div class="dropdown-wrapper">
+            <button id="speed-btn" class="control-btn" title="Playback Speed">
+              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            </button>
+            <div id="speed-menu" class="dropdown-menu hidden">
+              <button class="dropdown-item" data-speed="0.5">0.5x</button>
+              <button class="dropdown-item" data-speed="0.75">0.75x</button>
+              <button class="dropdown-item active" data-speed="1">Normal</button>
+              <button class="dropdown-item" data-speed="1.25">1.25x</button>
+              <button class="dropdown-item" data-speed="1.5">1.5x</button>
+              <button class="dropdown-item" data-speed="2">2.0x</button>
+            </div>
+          </div>
+
+          <!-- Picture in Picture -->
           <button id="pip-btn" class="control-btn" title="Picture in Picture">
             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><rect x="13" y="13" width="7" height="7"></rect></svg>
           </button>
 
+          <!-- Fullscreen -->
           <button id="fs-btn" class="control-btn" title="Toggle Fullscreen">
             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
           </button>
@@ -749,32 +928,61 @@ function playerPage(sources, title, episode, isDub) {
     const centerPlay = document.getElementById('center-play');
     const playBtn = document.getElementById('play-btn');
     const subBtn = document.getElementById('sub-btn');
+    const subStylesBtn = document.getElementById('sub-styles-btn');
+    const subStylesMenu = document.getElementById('sub-styles-menu');
+    const subSizeSelect = document.getElementById('sub-size');
+    const subColorSelect = document.getElementById('sub-color');
+    const subBgSelect = document.getElementById('sub-bg');
+    
     const qualityBtn = document.getElementById('quality-btn');
     const qualityMenu = document.getElementById('quality-menu');
+    
+    const speedBtn = document.getElementById('speed-btn');
+    const speedMenu = document.getElementById('speed-menu');
+    
     const pipBtn = document.getElementById('pip-btn');
     const fsBtn = document.getElementById('fs-btn');
+    const volumeBtn = document.getElementById('volume-btn');
+    const volumeSlider = document.getElementById('volume-slider');
+    
     const progressContainer = document.getElementById('progress-container');
     const progressFill = document.getElementById('progress-fill');
+    const progressBuffer = document.getElementById('progress-buffer');
     const progressHover = document.getElementById('progress-hover');
     const progressHandle = document.getElementById('progress-handle');
     const controlsBar = document.getElementById('controls-bar');
     const qbar = document.getElementById('qbar');
 
+    const resumeToast = document.getElementById('resume-toast');
+    const resumeTimeSpan = document.getElementById('resume-time');
+    const resumeYes = document.getElementById('resume-yes');
+    const resumeNo = document.getElementById('resume-no');
+    const skipIntroBtn = document.getElementById('skip-intro-btn');
+
     let hls = null;
     let idleTimer = null;
+    let progressSaveInterval = null;
+    let lastVolume = localStorage.getItem('player-volume') !== null ? parseFloat(localStorage.getItem('player-volume')) : 1;
+    let isMuted = localStorage.getItem('player-muted') === 'true';
 
     const playIcon = '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
     const pauseIcon = '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
+    const volHighIcon = '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    const volLowIcon = '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    const volMutedIcon = '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>';
 
     // Load Stream
     function load(url, subtitleUrl, isM3U8) {
       err.classList.remove('show');
       loader.classList.remove('hidden');
+      resumeToast.classList.add('hidden');
+      skipIntroBtn.classList.add('hidden');
       if (hls) { hls.destroy(); hls = null; }
       
       // Clean tracks
       while(vid.firstChild) { vid.removeChild(vid.firstChild); }
       subBtn.classList.add('hidden');
+      subStylesBtn.classList.add('hidden');
       qualityBtn.classList.add('hidden');
 
       // Add subtitle if provided
@@ -788,6 +996,8 @@ function playerPage(sources, title, episode, isDub) {
         vid.appendChild(track);
         subBtn.classList.remove('hidden');
         subBtn.classList.add('active');
+        subStylesBtn.classList.remove('hidden');
+        
         vid.textTracks.addEventListener('addtrack', () => {
           vid.textTracks[0].mode = 'showing';
         });
@@ -802,17 +1012,20 @@ function playerPage(sources, title, episode, isDub) {
             loader.classList.add('hidden');
             vid.play().catch(() => {});
             buildQualityMenu();
+            initPlaybackResume(url);
           });
           hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) err.classList.add('show'); });
         } else if (vid.canPlayType('application/vnd.apple.mpegurl')) {
           vid.src = url;
           vid.play().catch(() => {});
+          initPlaybackResume(url);
         } else {
           err.classList.add('show');
         }
       } else {
         vid.src = url;
         vid.play().catch(() => {});
+        initPlaybackResume(url);
       }
     }
 
@@ -853,6 +1066,33 @@ function playerPage(sources, title, episode, isDub) {
       progressFill.style.width = \`\${pct}%\`;
       progressHandle.style.left = \`\${pct}%\`;
       document.getElementById('time-display').textContent = \`\${formatTime(vid.currentTime)} / \${formatTime(vid.duration)}\`;
+      
+      // Auto-display Skip Intro between 80s and 170s
+      if (vid.currentTime >= 80 && vid.currentTime <= 170) {
+        skipIntroBtn.classList.remove('hidden');
+      } else {
+        skipIntroBtn.classList.add('hidden');
+      }
+    });
+
+    skipIntroBtn.onclick = () => {
+      vid.currentTime = 175;
+      skipIntroBtn.classList.add('hidden');
+      triggerCenterIcon('<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>');
+    };
+
+    // Buffer range tracking
+    vid.addEventListener('progress', () => {
+      if (vid.duration > 0 && vid.buffered.length > 0) {
+        for (let i = 0; i < vid.buffered.length; i++) {
+          if (vid.buffered.start(vid.buffered.length - 1 - i) < vid.currentTime) {
+            const bufferEnd = vid.buffered.end(vid.buffered.length - 1 - i);
+            const pct = (bufferEnd / vid.duration) * 100;
+            progressBuffer.style.width = \`\${pct}%\`;
+            break;
+          }
+        }
+      }
     });
 
     progressContainer.addEventListener('click', (e) => {
@@ -936,6 +1176,83 @@ function playerPage(sources, title, episode, isDub) {
       }
     });
 
+    // Subtitle Styles Handler
+    const subStyleEl = document.createElement('style');
+    document.head.appendChild(subStyleEl);
+
+    function applySubtitleStyles() {
+      const size = subSizeSelect.value;
+      const color = subColorSelect.value;
+      const bg = subBgSelect.value;
+
+      localStorage.setItem('sub-size', size);
+      localStorage.setItem('sub-color', color);
+      localStorage.setItem('sub-bg', bg);
+
+      subStyleEl.textContent = \`
+        ::cue {
+          font-size: \${size} !important;
+          color: \${color} !important;
+          background: \${bg} !important;
+        }
+      \`;
+    }
+
+    subSizeSelect.onchange = applySubtitleStyles;
+    subColorSelect.onchange = applySubtitleStyles;
+    subBgSelect.onchange = applySubtitleStyles;
+
+    if (localStorage.getItem('sub-size')) subSizeSelect.value = localStorage.getItem('sub-size');
+    if (localStorage.getItem('sub-color')) subColorSelect.value = localStorage.getItem('sub-color');
+    if (localStorage.getItem('sub-bg')) subBgSelect.value = localStorage.getItem('sub-bg');
+    applySubtitleStyles();
+
+    // Volume Scrubber Logic
+    function updateVolumeUI() {
+      if (isMuted || vid.volume === 0) {
+        volumeBtn.innerHTML = volMutedIcon;
+        volumeSlider.value = 0;
+      } else if (vid.volume < 0.5) {
+        volumeBtn.innerHTML = volLowIcon;
+        volumeSlider.value = vid.volume;
+      } else {
+        volumeBtn.innerHTML = volHighIcon;
+        volumeSlider.value = vid.volume;
+      }
+    }
+
+    function setVolume(val, save = true) {
+      vid.volume = val;
+      isMuted = val === 0;
+      if (save) {
+        localStorage.setItem('player-volume', val);
+        localStorage.setItem('player-muted', isMuted);
+      }
+      updateVolumeUI();
+    }
+
+    volumeSlider.oninput = (e) => setVolume(parseFloat(e.target.value));
+    volumeBtn.onclick = () => {
+      if (vid.volume > 0) {
+        lastVolume = vid.volume;
+        setVolume(0);
+      } else {
+        setVolume(lastVolume);
+      }
+    };
+    setVolume(isMuted ? 0 : lastVolume, false);
+
+    // Playback Speed Selector
+    document.querySelectorAll('#speed-menu .dropdown-item').forEach(btn => {
+      btn.onclick = () => {
+        const speed = parseFloat(btn.dataset.speed);
+        vid.playbackRate = speed;
+        document.querySelectorAll('#speed-menu .dropdown-item').forEach(x => x.classList.remove('active'));
+        btn.classList.add('active');
+        speedMenu.classList.add('hidden');
+      };
+    });
+
     // Quality manual dropdown builder
     function buildQualityMenu() {
       if (!hls || !hls.levels || hls.levels.length <= 1) return;
@@ -966,16 +1283,153 @@ function playerPage(sources, title, episode, isDub) {
     }
 
     function setQualityActive(btn) {
-      document.querySelectorAll('.dropdown-item').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('#quality-menu .dropdown-item').forEach(x => x.classList.remove('active'));
       btn.classList.add('active');
       qualityMenu.classList.add('hidden');
     }
 
-    qualityBtn.addEventListener('click', (e) => {
+    // Dropdown Closing / Opening Helper
+    function closeAllMenus() {
+      qualityMenu.classList.add('hidden');
+      speedMenu.classList.add('hidden');
+      subStylesMenu.classList.add('hidden');
+    }
+
+    qualityBtn.onclick = (e) => {
       e.stopPropagation();
-      qualityMenu.classList.toggle('hidden');
-    });
-    document.addEventListener('click', () => qualityMenu.classList.add('hidden'));
+      const wasHidden = qualityMenu.classList.contains('hidden');
+      closeAllMenus();
+      if (wasHidden) qualityMenu.classList.remove('hidden');
+    };
+
+    speedBtn.onclick = (e) => {
+      e.stopPropagation();
+      const wasHidden = speedMenu.classList.contains('hidden');
+      closeAllMenus();
+      if (wasHidden) speedMenu.classList.remove('hidden');
+    };
+
+    subStylesBtn.onclick = (e) => {
+      e.stopPropagation();
+      const wasHidden = subStylesMenu.classList.contains('hidden');
+      closeAllMenus();
+      if (wasHidden) subStylesMenu.classList.remove('hidden');
+    };
+
+    document.onclick = closeAllMenus;
+
+    // Keyboard Hotkeys
+    window.onkeydown = (e) => {
+      if (document.activeElement.tagName === 'SELECT' || document.activeElement.tagName === 'INPUT') return;
+
+      switch (e.key.toLowerCase()) {
+        case ' ':
+        case 'k':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'arrowright':
+        case 'l':
+          e.preventDefault();
+          vid.currentTime = Math.min(vid.duration, vid.currentTime + 10);
+          triggerCenterIcon('<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M5 12h14M12 5l7 7-7 7"/></svg>');
+          break;
+        case 'arrowleft':
+        case 'j':
+          e.preventDefault();
+          vid.currentTime = Math.max(0, vid.currentTime - 10);
+          triggerCenterIcon('<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>');
+          break;
+        case 'arrowup':
+          e.preventDefault();
+          setVolume(Math.min(1, vid.volume + 0.05));
+          break;
+        case 'arrowdown':
+          e.preventDefault();
+          setVolume(Math.max(0, vid.volume - 0.05));
+          break;
+        case 'm':
+          e.preventDefault();
+          volumeBtn.click();
+          break;
+        case 'f':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 'p':
+          e.preventDefault();
+          pipBtn.click();
+          break;
+      }
+    };
+
+    // Mobile Double-Tap seeking
+    let lastTap = 0;
+    vid.ontouchend = (e) => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        e.preventDefault();
+        const rect = vid.getBoundingClientRect();
+        const touchX = e.changedTouches[0].clientX - rect.left;
+        const third = rect.width / 3;
+
+        if (touchX < third) {
+          vid.currentTime = Math.max(0, vid.currentTime - 10);
+          triggerCenterIcon('<svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>');
+        } else if (touchX > third * 2) {
+          vid.currentTime = Math.min(vid.duration, vid.currentTime + 10);
+          triggerCenterIcon('<svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none"><path d="M5 12h14M12 5l7 7-7 7"/></svg>');
+        }
+      }
+      lastTap = now;
+    };
+
+    // Playback progress resume
+    function getProgressKey(url) {
+      return \`progress_\${btoa(url).slice(0, 30)}\`;
+    }
+
+    function initPlaybackResume(url) {
+      const key = getProgressKey(url);
+      const saved = localStorage.getItem(key);
+      
+      clearInterval(progressSaveInterval);
+
+      if (saved) {
+        const savedTime = parseFloat(saved);
+        if (savedTime > 10) {
+          vid.addEventListener('loadedmetadata', function onMetadata() {
+            vid.removeEventListener('loadedmetadata', onMetadata);
+            if (savedTime < vid.duration * 0.98) {
+              resumeTimeSpan.textContent = formatTime(savedTime);
+              resumeToast.classList.remove('hidden');
+              
+              resumeYes.onclick = () => {
+                vid.currentTime = savedTime;
+                resumeToast.classList.add('hidden');
+                vid.play().catch(() => {});
+              };
+              
+              resumeNo.onclick = () => {
+                resumeToast.classList.add('hidden');
+              };
+              
+              setTimeout(() => resumeToast.classList.add('hidden'), 8000);
+            }
+          });
+        }
+      }
+
+      progressSaveInterval = setInterval(() => {
+        if (vid.currentTime > 5 && vid.duration > 0) {
+          if (vid.currentTime > vid.duration * 0.98) {
+            localStorage.removeItem(key);
+          } else {
+            localStorage.setItem(key, vid.currentTime.toString());
+          }
+        }
+      }, 4000);
+    }
 
     // Server mirror buttons
     document.querySelectorAll('.q-btn').forEach(b => {
