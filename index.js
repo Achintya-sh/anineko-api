@@ -290,10 +290,13 @@ async function getStreamSources(slug, episodeNumber, isDub) {
         const { data: playerHtml } = await http.get(embedUrl);
         const match = playerHtml.match(/const\s+src\s*=\s*["'](https?:\/\/[^"']+)["']/);
         if (match && match[1]) {
+          const subMatch = embedUrl.match(/[?&](sub|caption_1)=([^&]+)/);
+          const subtitle = subMatch ? decodeURIComponent(subMatch[2]) : '';
           sources.push({
             url: match[1],
             quality: label,
-            isM3U8: match[1].includes('.m3u8')
+            isM3U8: match[1].includes('.m3u8'),
+            subtitle: subtitle
           });
         }
       } catch (e) {
@@ -390,10 +393,14 @@ app.get('/anime/gogoanime/embed', async (req, res) => {
   try {
     const sources = await resolveAnimeStream(anilistId, epNum, isDub, rawTitle);
     const baseProxyUrl = getBaseProxyUrl(req);
-    const proxiedSources = sources.map(s => ({
-      ...s,
-      url: `${baseProxyUrl}${encodeURIComponent(s.url)}`
-    }));
+    const proxiedSources = sources.map(s => {
+      const proxiedSub = s.subtitle ? `${baseProxyUrl}${encodeURIComponent(s.subtitle)}` : '';
+      return {
+        ...s,
+        url: `${baseProxyUrl}${encodeURIComponent(s.url)}`,
+        subtitle: proxiedSub
+      };
+    });
     res.send(playerPage(proxiedSources, displayTitle, epNum, isDub));
   } catch (err) {
     console.error(`[AniNeko] ✗ ${err.message}`);
@@ -459,11 +466,11 @@ function playerPage(sources, title, episode, isDub) {
     || sources.find(s => s.quality === 'default')
     || sources[0];
 
-  const qualityButtons = sources
+  const serverButtons = sources
     .filter(s => s.url)
     .map((s, i) => {
       const active = s.url === preferred.url ? 'active' : '';
-      return `<button class="q-btn ${active}" data-url="${s.url}" data-m3u8="${!!s.isM3U8}">${s.quality}</button>`;
+      return `<button class="q-btn ${active}" data-url="${s.url}" data-subtitle="${s.subtitle || ''}" data-m3u8="${!!s.isM3U8}">${s.quality}</button>`;
     }).join('');
 
   return `<!DOCTYPE html>
@@ -475,68 +482,512 @@ function playerPage(sources, title, episode, isDub) {
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-    #wrap { position: relative; width: 100%; height: 100vh; }
-    video { width: 100%; height: 100%; background: #000; display: block; }
-    #qbar {
-      position: absolute; top: 10px; right: 10px; z-index: 20;
-      display: flex; gap: 5px; flex-wrap: wrap;
-      background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 6px;
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    
+    #player-container {
+      position: relative;
+      width: 100%;
+      height: 100vh;
+      background: #000;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
+    
+    video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+    }
+
+    /* Subtitles styling overrides */
+    ::cue {
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      font-size: 16px;
+      font-family: inherit;
+    }
+
+    #qbar {
+      position: absolute; top: 15px; left: 15px; z-index: 30;
+      display: flex; gap: 6px; flex-wrap: wrap;
+      background: rgba(0,0,0,0.65); padding: 6px 12px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      backdrop-filter: blur(10px);
+      transition: opacity 0.3s;
+    }
+    #qbar.hidden { opacity: 0; pointer-events: none; }
+    
     .q-btn {
-      background: transparent; color: #999; border: 1px solid #444;
-      padding: 3px 9px; font: 700 11px/1 monospace; cursor: pointer;
-      border-radius: 3px; text-transform: uppercase; transition: all .15s;
+      background: transparent; color: #aaa; border: 1px solid rgba(255,255,255,0.15);
+      padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
+      border-radius: 4px; text-transform: uppercase; transition: all 0.2s;
     }
     .q-btn:hover { border-color: #ff6b00; color: #ff6b00; }
     .q-btn.active { background: #ff6b00; color: #000; border-color: #ff6b00; }
+
     #err {
       display: none; position: absolute; inset: 0;
-      background: rgba(0,0,0,.85); color: #f44; font: 13px/1.5 monospace;
+      background: rgba(0,0,0,.85); color: #f44; font-family: monospace; font-size: 13px;
       align-items: center; justify-content: center; text-align: center;
-      padding: 20px;
+      padding: 20px; z-index: 25;
     }
     #err.show { display: flex; }
+
+    /* Custom Controls Styles */
+    .controls-bar {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 20;
+      background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.5) 60%, transparent 100%);
+      padding: 30px 20px 20px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: opacity 0.3s ease;
+      user-select: none;
+    }
+    .controls-bar.hidden { opacity: 0; pointer-events: none; }
+
+    .progress-container {
+      width: 100%;
+      height: 4px;
+      position: relative;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+    }
+    .progress-container:hover { height: 8px; }
+
+    .progress-bg {
+      position: absolute; left: 0; right: 0; height: 100%;
+      background: rgba(255,255,255,0.2);
+      border-radius: 4px;
+    }
+    .progress-hover {
+      position: absolute; left: 0; height: 100%;
+      background: rgba(255,255,255,0.3);
+      border-radius: 4px;
+      width: 0;
+    }
+    .progress-fill {
+      position: absolute; left: 0; height: 100%;
+      background: #ff6b00;
+      border-radius: 4px;
+      width: 0;
+    }
+    .progress-handle {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%) scale(0);
+      width: 12px;
+      height: 12px;
+      background: #ff6b00;
+      border-radius: 50%;
+      transition: transform 0.1s;
+    }
+    .progress-container:hover .progress-handle { transform: translate(-50%, -50%) scale(1); }
+
+    .buttons-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .left-controls, .right-controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .control-btn {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #ccc;
+      cursor: pointer;
+      transition: color 0.2s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+    }
+    .control-btn:hover { color: #ff6b00; }
+    .control-btn:active { transform: scale(0.9); }
+    .control-btn.active { color: #ff6b00; }
+
+    .time-display {
+      color: #aaa;
+      font-size: 13px;
+      font-family: monospace;
+    }
+
+    .dropdown-wrapper {
+      position: relative;
+    }
+
+    .dropdown-menu {
+      position: absolute;
+      bottom: 35px;
+      right: 0;
+      background: rgba(15,15,15,0.95);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px;
+      padding: 6px 0;
+      min-width: 100px;
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+    .dropdown-menu.hidden { display: none; }
+
+    .dropdown-item {
+      background: transparent;
+      border: none;
+      color: #bbb;
+      text-align: left;
+      padding: 8px 16px;
+      font-size: 12px;
+      cursor: pointer;
+      width: 100%;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .dropdown-item:hover { background: rgba(255,107,0,0.15); color: #ff6b00; }
+    .dropdown-item.active { color: #ff6b00; font-weight: 700; }
+
+    /* Loader styling */
+    .loader {
+      position: absolute; z-index: 10;
+      border: 4px solid rgba(255,255,255,0.1);
+      border-top: 4px solid #ff6b00;
+      border-radius: 50%;
+      width: 44px; height: 44px;
+      animation: spin 1s linear infinite;
+    }
+    .loader.hidden { display: none; }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Center Overlay Animation */
+    .center-icon {
+      position: absolute; z-index: 12;
+      width: 60px; height: 60px;
+      background: rgba(0,0,0,0.6);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none;
+      transform: scale(0.7);
+      transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.4s;
+      color: #ff6b00;
+    }
+    .center-icon.active { opacity: 1; transform: scale(1); }
   </style>
 </head>
 <body>
-  <div id="wrap">
-    <video id="v" controls playsinline></video>
-    ${sources.length > 1 ? `<div id="qbar">${qualityButtons}</div>` : ''}
+  <div id="player-container">
+    <video id="v" playsinline></video>
+    
+    <div id="loader" class="loader"></div>
+    <div id="center-play" class="center-icon"></div>
+    
+    ${sources.length > 1 ? `<div id="qbar">${serverButtons}</div>` : ''}
     <div id="err">⚠ Stream failed.<br>Try another quality or server.</div>
+
+    <!-- Custom Control Bar -->
+    <div id="controls-bar" class="controls-bar hidden">
+      <!-- Progress Bar (Scrubber) -->
+      <div class="progress-container" id="progress-container">
+        <div class="progress-bg"></div>
+        <div class="progress-hover" id="progress-hover"></div>
+        <div class="progress-fill" id="progress-fill"></div>
+        <div class="progress-handle" id="progress-handle"></div>
+      </div>
+
+      <!-- Controls Row -->
+      <div class="buttons-row">
+        <div class="left-controls">
+          <button id="play-btn" class="control-btn" title="Play">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          </button>
+          <span id="time-display" class="time-display">00:00 / 00:00</span>
+        </div>
+
+        <div class="right-controls">
+          <button id="sub-btn" class="control-btn hidden" title="Toggle Subtitles">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect><line x1="7" y1="8" x2="17" y2="8"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="16" x2="13" y2="16"></line></svg>
+          </button>
+
+          <div class="dropdown-wrapper">
+            <button id="quality-btn" class="control-btn hidden" title="Change Quality">
+              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <div id="quality-menu" class="dropdown-menu hidden"></div>
+          </div>
+
+          <button id="pip-btn" class="control-btn" title="Picture in Picture">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><rect x="13" y="13" width="7" height="7"></rect></svg>
+          </button>
+
+          <button id="fs-btn" class="control-btn" title="Toggle Fullscreen">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
+
   <script>
     const vid = document.getElementById('v');
     const err = document.getElementById('err');
-    let hls = null;
+    const loader = document.getElementById('loader');
+    const centerPlay = document.getElementById('center-play');
+    const playBtn = document.getElementById('play-btn');
+    const subBtn = document.getElementById('sub-btn');
+    const qualityBtn = document.getElementById('quality-btn');
+    const qualityMenu = document.getElementById('quality-menu');
+    const pipBtn = document.getElementById('pip-btn');
+    const fsBtn = document.getElementById('fs-btn');
+    const progressContainer = document.getElementById('progress-container');
+    const progressFill = document.getElementById('progress-fill');
+    const progressHover = document.getElementById('progress-hover');
+    const progressHandle = document.getElementById('progress-handle');
+    const controlsBar = document.getElementById('controls-bar');
+    const qbar = document.getElementById('qbar');
 
-    function load(url, isM3U8) {
+    let hls = null;
+    let idleTimer = null;
+
+    const playIcon = '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+    const pauseIcon = '<svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
+
+    // Load Stream
+    function load(url, subtitleUrl, isM3U8) {
       err.classList.remove('show');
+      loader.classList.remove('hidden');
       if (hls) { hls.destroy(); hls = null; }
+      
+      // Clean tracks
+      while(vid.firstChild) { vid.removeChild(vid.firstChild); }
+      subBtn.classList.add('hidden');
+      qualityBtn.classList.add('hidden');
+
+      // Add subtitle if provided
+      if (subtitleUrl) {
+        const track = document.createElement('track');
+        track.label = 'English';
+        track.kind = 'subtitles';
+        track.srclang = 'en';
+        track.src = subtitleUrl;
+        track.default = true;
+        vid.appendChild(track);
+        subBtn.classList.remove('hidden');
+        subBtn.classList.add('active');
+        vid.textTracks.addEventListener('addtrack', () => {
+          vid.textTracks[0].mode = 'showing';
+        });
+      }
+
       if (isM3U8) {
         if (Hls.isSupported()) {
           hls = new Hls({ enableWorker: true });
           hls.loadSource(url);
           hls.attachMedia(vid);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => vid.play().catch(() => {}));
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            loader.classList.add('hidden');
+            vid.play().catch(() => {});
+            buildQualityMenu();
+          });
           hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) err.classList.add('show'); });
         } else if (vid.canPlayType('application/vnd.apple.mpegurl')) {
-          vid.src = url; vid.play().catch(() => {});
-        } else { err.classList.add('show'); }
+          vid.src = url;
+          vid.play().catch(() => {});
+        } else {
+          err.classList.add('show');
+        }
       } else {
-        vid.src = url; vid.play().catch(() => {});
+        vid.src = url;
+        vid.play().catch(() => {});
       }
     }
 
-    load(${JSON.stringify(preferred.url)}, ${!!preferred.isM3U8});
+    // Playback state toggle
+    function togglePlay() {
+      if (vid.paused) { vid.play().catch(() => {}); } else { vid.pause(); }
+    }
+    
+    vid.addEventListener('play', () => {
+      playBtn.innerHTML = pauseIcon;
+      triggerCenterIcon(playIcon);
+    });
+    vid.addEventListener('pause', () => {
+      playBtn.innerHTML = playIcon;
+      triggerCenterIcon(pauseIcon);
+    });
+    
+    vid.addEventListener('click', togglePlay);
+    playBtn.addEventListener('click', togglePlay);
 
+    // Center icon animation
+    function triggerCenterIcon(svgHtml) {
+      centerPlay.innerHTML = svgHtml;
+      centerPlay.classList.add('active');
+      setTimeout(() => centerPlay.classList.remove('active'), 500);
+    }
+
+    // Time update & Progress bar
+    function formatTime(secs) {
+      if (isNaN(secs) || secs === Infinity) return '00:00';
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return \`\${m < 10 ? '0' : ''}\${m}:\${s < 10 ? '0' : ''}\${s}\`;
+    }
+
+    vid.addEventListener('timeupdate', () => {
+      const pct = (vid.currentTime / vid.duration) * 100 || 0;
+      progressFill.style.width = \`\${pct}%\`;
+      progressHandle.style.left = \`\${pct}%\`;
+      document.getElementById('time-display').textContent = \`\${formatTime(vid.currentTime)} / \${formatTime(vid.duration)}\`;
+    });
+
+    progressContainer.addEventListener('click', (e) => {
+      const rect = progressContainer.getBoundingClientRect();
+      const pos = (e.clientX - rect.left) / rect.width;
+      vid.currentTime = pos * vid.duration;
+    });
+
+    progressContainer.addEventListener('mousemove', (e) => {
+      const rect = progressContainer.getBoundingClientRect();
+      const pos = (e.clientX - rect.left) / rect.width;
+      progressHover.style.width = \`\${pos * 100}%\`;
+    });
+
+    progressContainer.addEventListener('mouseleave', () => {
+      progressHover.style.width = '0%';
+    });
+
+    // Auto-hide controls on idle
+    function showControls() {
+      controlsBar.classList.remove('hidden');
+      if (qbar) qbar.classList.remove('hidden');
+      document.body.style.cursor = 'default';
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (!vid.paused) {
+          controlsBar.classList.add('hidden');
+          if (qbar) qbar.classList.add('hidden');
+          document.body.style.cursor = 'none';
+        }
+      }, 3000);
+    }
+
+    document.body.addEventListener('mousemove', showControls);
+    document.body.addEventListener('click', showControls);
+    vid.addEventListener('play', showControls);
+    showControls();
+
+    // Loader events
+    vid.addEventListener('waiting', () => loader.classList.remove('hidden'));
+    vid.addEventListener('playing', () => loader.classList.add('hidden'));
+
+    // Fullscreen
+    async function toggleFullscreen() {
+      const container = document.getElementById('player-container');
+      if (!document.fullscreenElement) {
+        await container.requestFullscreen().catch(e => console.error(e));
+      } else {
+        await document.exitFullscreen();
+      }
+    }
+    fsBtn.addEventListener('click', toggleFullscreen);
+    vid.addEventListener('dblclick', toggleFullscreen);
+
+    // Picture in Picture
+    if (document.pictureInPictureEnabled) {
+      pipBtn.addEventListener('click', async () => {
+        try {
+          if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+          } else {
+            await vid.requestPictureInPicture();
+          }
+        } catch (e) { console.error(e); }
+      });
+    } else {
+      pipBtn.classList.add('hidden');
+    }
+
+    // Subtitle toggler
+    subBtn.addEventListener('click', () => {
+      const track = vid.textTracks[0];
+      if (track) {
+        if (track.mode === 'showing') {
+          track.mode = 'disabled';
+          subBtn.classList.remove('active');
+        } else {
+          track.mode = 'showing';
+          subBtn.classList.add('active');
+        }
+      }
+    });
+
+    // Quality manual dropdown builder
+    function buildQualityMenu() {
+      if (!hls || !hls.levels || hls.levels.length <= 1) return;
+      qualityBtn.classList.remove('hidden');
+      qualityMenu.innerHTML = '';
+
+      // Auto button
+      const autoBtn = document.createElement('button');
+      autoBtn.className = 'dropdown-item active';
+      autoBtn.textContent = 'Auto';
+      autoBtn.onclick = () => {
+        hls.currentLevel = -1;
+        setQualityActive(autoBtn);
+      };
+      qualityMenu.appendChild(autoBtn);
+
+      // Levels
+      hls.levels.forEach((l, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'dropdown-item';
+        btn.textContent = l.height ? \`\${l.height}p\` : \`Level \${idx + 1}\`;
+        btn.onclick = () => {
+          hls.currentLevel = idx;
+          setQualityActive(btn);
+        };
+        qualityMenu.appendChild(btn);
+      });
+    }
+
+    function setQualityActive(btn) {
+      document.querySelectorAll('.dropdown-item').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      qualityMenu.classList.add('hidden');
+    }
+
+    qualityBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      qualityMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => qualityMenu.classList.add('hidden'));
+
+    // Server mirror buttons
     document.querySelectorAll('.q-btn').forEach(b => {
       b.addEventListener('click', () => {
         document.querySelectorAll('.q-btn').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
-        load(b.dataset.url, b.dataset.m3u8 === 'true');
+        load(b.dataset.url, b.dataset.subtitle, b.dataset.m3u8 === 'true');
       });
     });
+
+    // Initialize with preferred
+    load(${JSON.stringify(preferred.url)}, ${JSON.stringify(preferred.subtitle || '')}, ${!!preferred.isM3U8});
   </script>
 </body>
 </html>`;
